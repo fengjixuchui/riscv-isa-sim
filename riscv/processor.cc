@@ -262,6 +262,8 @@ void state_t::reset(reg_t max_isa)
 
   memset(this->tdata2, 0, sizeof(this->tdata2));
   debug_mode = false;
+  single_step = STEP_NONE;
+  memset(this->mcontrol, 0, sizeof(this->mcontrol));
 
   memset(this->pmpcfg, 0, sizeof(this->pmpcfg));
   memset(this->pmpaddr, 0, sizeof(this->pmpaddr));
@@ -608,11 +610,10 @@ void processor_t::set_csr(int which, reg_t val)
       reg_t mask = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_MIE | MSTATUS_MPIE
                  | MSTATUS_MPRV
                  | (supports_extension('S') ? MSTATUS_SUM : 0)
-                 | MSTATUS_MXR | MSTATUS_TW | MSTATUS_TVM
-                 | MSTATUS_TSR | MSTATUS_UXL | MSTATUS_SXL |
-                 (has_fs ? MSTATUS_FS : 0) |
-                 (has_vs ? MSTATUS_VS : 0) |
-                 (ext ? MSTATUS_XS : 0);
+                 | MSTATUS_MXR | MSTATUS_TW | MSTATUS_TVM | MSTATUS_TSR
+                 | (has_fs ? MSTATUS_FS : 0)
+                 | (has_vs ? MSTATUS_VS : 0)
+                 | (ext ? MSTATUS_XS : 0);
 
       reg_t requested_mpp = legalize_privilege(get_field(val, MSTATUS_MPP));
       state.mstatus = set_field(state.mstatus, MSTATUS_MPP, requested_mpp);
@@ -629,8 +630,10 @@ void processor_t::set_csr(int which, reg_t val)
       else
         state.mstatus = set_field(state.mstatus, MSTATUS64_SD, dirty);
 
-      state.mstatus = set_field(state.mstatus, MSTATUS_UXL, xlen_to_uxl(max_xlen));
-      state.mstatus = set_field(state.mstatus, MSTATUS_SXL, xlen_to_uxl(max_xlen));
+      if (supports_extension('U'))
+        state.mstatus = set_field(state.mstatus, MSTATUS_UXL, xlen_to_uxl(max_xlen));
+      if (supports_extension('S'))
+        state.mstatus = set_field(state.mstatus, MSTATUS_SXL, xlen_to_uxl(max_xlen));
       // U-XLEN == S-XLEN == M-XLEN
       xlen = max_xlen;
       break;
@@ -856,10 +859,15 @@ reg_t processor_t::get_csr(int which)
         break;
       return state.frm;
     case CSR_FCSR:
-      require_fp;
+      {require_fp;
       if (!supports_extension('F'))
         break;
-      return (state.fflags << FSR_AEXC_SHIFT) | (state.frm << FSR_RD_SHIFT);
+      uint32_t shared_flags = 0;
+      if (supports_extension('V'))
+            shared_flags = (VU.vxrm << FSR_VXRM_SHIFT) | (VU.vxsat << FSR_VXSAT_SHIFT);
+      return (state.fflags << FSR_AEXC_SHIFT) | (state.frm << FSR_RD_SHIFT) |
+          shared_flags;
+      }
     case CSR_INSTRET:
     case CSR_CYCLE:
       if (ctr_ok)
