@@ -257,13 +257,13 @@ void state_t::reset(reg_t max_isa)
   memset(&this->dcsr, 0, sizeof(this->dcsr));
 
   tselect = 0;
+  memset(this->mcontrol, 0, sizeof(this->mcontrol));
   for (auto &item : mcontrol)
     item.type = 2;
 
   memset(this->tdata2, 0, sizeof(this->tdata2));
   debug_mode = false;
   single_step = STEP_NONE;
-  memset(this->mcontrol, 0, sizeof(this->mcontrol));
 
   memset(this->pmpcfg, 0, sizeof(this->pmpcfg));
   memset(this->pmpaddr, 0, sizeof(this->pmpaddr));
@@ -888,6 +888,7 @@ reg_t processor_t::get_csr(int which)
       break;
     case CSR_SCOUNTEREN: return state.scounteren;
     case CSR_MCOUNTEREN: return state.mcounteren;
+    case CSR_MCOUNTINHIBIT: return 0;
     case CSR_SSTATUS: {
       reg_t mask = SSTATUS_SIE | SSTATUS_SPIE | SSTATUS_SPP | SSTATUS_FS
                  | (supports_extension('V') ? SSTATUS_VS : 0)
