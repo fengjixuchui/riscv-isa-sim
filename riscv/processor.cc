@@ -21,10 +21,11 @@
 #define STATE state
 
 processor_t::processor_t(const char* isa, const char* priv, const char* varch,
-                         simif_t* sim, uint32_t id, bool halt_on_reset)
+                         simif_t* sim, uint32_t id, bool halt_on_reset,
+                         FILE* log_file)
   : debug(false), halt_request(false), sim(sim), ext(NULL), id(id), xlen(0),
   histogram_enabled(false), log_commits_enabled(false),
-  halt_on_reset(halt_on_reset), last_pc(1), executions(1)
+  log_file(log_file), halt_on_reset(halt_on_reset), last_pc(1), executions(1)
 {
   VU.p = this;
   parse_isa_string(isa);
@@ -74,17 +75,27 @@ static void bad_varch_string(const char* varch, const char *message)
   abort();
 }
 
-static int parse_varch(std::string &str){
-  int val = 0;
-  if(!str.empty()){
-    std::string sval = str.substr(1);
-    val = std::stoi(sval);
-    if ((val & (val - 1)) != 0) // val should be power of 2
-      bad_varch_string(str.c_str(), "must be a power of 2");
-  }else{
-    bad_varch_string(str.c_str(), "must not be empty");
+static std::string get_string_token(std::string str, const char delimiter, size_t& pos)
+{
+  size_t _pos = pos;
+  while (pos < str.length() && str[pos] != delimiter) ++pos;
+  return str.substr(_pos, pos - _pos);
+}
+
+static int get_int_token(std::string str, const char delimiter, size_t& pos)
+{
+  size_t _pos = pos;
+  while (pos < str.length() && str[pos] != delimiter) {
+    if (!isdigit(str[pos]))
+      bad_varch_string(str.c_str(), "Unsupported value"); // An integer is expected
+    ++pos;
   }
-  return val;
+  return (pos == _pos) ? 0 : stoi(str.substr(_pos, pos - _pos));
+}
+
+static bool check_pow2(int val)
+{
+  return ((val & (val - 1))) == 0;
 }
 
 void processor_t::parse_varch_string(const char* s)
@@ -93,30 +104,32 @@ void processor_t::parse_varch_string(const char* s)
   for (const char *r = s; *r; r++)
     str += std::tolower(*r);
 
-  std::string delimiter = ":";
-
   size_t pos = 0;
+  size_t len = str.length();
   int vlen = 0;
   int elen = 0;
   int slen = 0;
-  std::string token;
-  while (!str.empty() && token != str) {
-    pos = str.find(delimiter);
-    if (pos == std::string::npos){
-      token = str;
-    }else{
-      token = str.substr(0, pos);
-    }
-    if (token[0] == 'v'){
-      vlen = parse_varch(token);
-    }else if (token[0] == 'e'){
-      elen = parse_varch(token);
-    }else if (token[0] == 's'){
-      slen = parse_varch(token);
-    }else{
-      bad_varch_string(str.c_str(), "Unsupported token");
-    }
-    str.erase(0, pos + delimiter.length());
+
+  while (pos < len) {
+    std::string attr = get_string_token(str, ':', pos);
+
+    ++pos;
+
+    if (attr == "vlen")
+      vlen = get_int_token(str, ',', pos);
+    else if (attr == "slen")
+      slen = get_int_token(str, ',', pos);
+    else if (attr == "elen")
+      elen = get_int_token(str, ',', pos);
+    else
+      bad_varch_string(s, "Unsupported token");
+
+    ++pos;
+  }
+
+  // The integer should be the power of 2
+  if (!check_pow2(vlen) || !check_pow2(elen) || !check_pow2(slen)){
+    bad_varch_string(s, "The integer value should be the power of 2");
   }
 
   /* Vector spec requirements. */
@@ -128,6 +141,8 @@ void processor_t::parse_varch_string(const char* s)
     bad_varch_string(s, "slen must be >= 32");
   if ((unsigned) elen < std::max(max_xlen, get_flen()))
     bad_varch_string(s, "elen must be >= max(xlen, flen)");
+  if (vlen != slen)
+    bad_varch_string(s, "vlen must be == slen for current limitation");
 
   /* spike requirements. */
   if (vlen > 4096)
@@ -345,17 +360,12 @@ void processor_t::set_histogram(bool value)
 #endif
 }
 
-void processor_t::set_log_commits(bool value)
+#ifdef RISCV_ENABLE_COMMITLOG
+void processor_t::enable_log_commits()
 {
-  log_commits_enabled = value;
-#ifndef RISCV_ENABLE_COMMITLOG
-  if (value) {
-    fprintf(stderr, "Commit logging support has not been properly enabled;");
-    fprintf(stderr, " please re-build the riscv-isa-sim project using \"configure --enable-commitlog\".\n");
-    abort();
-  }
-#endif
+  log_commits_enabled = true;
 }
+#endif
 
 void processor_t::reset()
 {
@@ -465,11 +475,11 @@ void processor_t::enter_debug_mode(uint8_t cause)
 void processor_t::take_trap(trap_t& t, reg_t epc)
 {
   if (debug) {
-    fprintf(stderr, "core %3d: exception %s, epc 0x%016" PRIx64 "\n",
+    fprintf(log_file, "core %3d: exception %s, epc 0x%016" PRIx64 "\n",
             id, t.name(), epc);
     if (t.has_tval())
-      fprintf(stderr, "core %3d:           tval 0x%016" PRIx64 "\n", id,
-          t.get_tval());
+      fprintf(log_file, "core %3d:           tval 0x%016" PRIx64 "\n",
+              id, t.get_tval());
   }
 
   if (state.debug_mode) {
@@ -530,10 +540,10 @@ void processor_t::disasm(insn_t insn)
   uint64_t bits = insn.bits() & ((1ULL << (8 * insn_length(insn.bits()))) - 1);
   if (last_pc != state.pc || last_bits != bits) {
     if (executions != 1) {
-      fprintf(stderr, "core %3d: Executed %" PRIx64 " times\n", id, executions);
+      fprintf(log_file, "core %3d: Executed %" PRIx64 " times\n", id, executions);
     }
 
-    fprintf(stderr, "core %3d: 0x%016" PRIx64 " (0x%08" PRIx64 ") %s\n",
+    fprintf(log_file, "core %3d: 0x%016" PRIx64 " (0x%08" PRIx64 ") %s\n",
             id, state.pc, bits, disassembler->disassemble(insn).c_str());
     last_pc = state.pc;
     last_bits = bits;
@@ -800,11 +810,11 @@ void processor_t::set_csr(int which, reg_t val)
       break;
     case CSR_VXSAT:
       dirty_fp_state;
-      VU.vxsat = val;
+      VU.vxsat = val & 0x1ul;
       break;
     case CSR_VXRM:
       dirty_fp_state;
-      VU.vxrm = val;
+      VU.vxrm = val & 0x3ul;
       break;
   }
 }

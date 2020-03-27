@@ -167,6 +167,7 @@ private:
 #ifndef RISCV_ENABLE_COMMITLOG
 # define WRITE_REG(reg, value) STATE.XPR.write(reg, value)
 # define WRITE_FREG(reg, value) DO_WRITE_FREG(reg, freg(value))
+# define WRITE_VSTATUS
 #else
    /* 0 : int
     * 1 : floating
@@ -182,6 +183,7 @@ private:
     STATE.log_reg_write[((reg) << 2) | 1] = wdata; \
     DO_WRITE_FREG(reg, wdata); \
   })
+# define WRITE_VSTATUS STATE.log_reg_write[3] = {0, 0};
 #endif
 
 // RVC macros
@@ -231,6 +233,7 @@ private:
     require_vector_vs; \
     require_extension('V'); \
     require(!P.VU.vill); \
+    WRITE_VSTATUS; \
     dirty_vs_state; \
   } while (0);
 #define require_vector_for_vsetvl \
@@ -454,9 +457,8 @@ static inline bool is_overlapped(const int astart, const int asize,
 
 #define VI_CHECK_SXX \
   VI_CHECK_STORE_SXX; \
-  if (P.VU.vlmul > 1 && insn.v_vm() == 0) { \
+  if (insn.v_vm() == 0 && (insn.v_nf() > 0 || P.VU.vlmul > 1)) \
     require(insn.rd() != 0); \
-  }
 
 #define VI_CHECK_DSS(is_vs1) \
   VI_WIDE_CHECK_COMMON; \
@@ -502,6 +504,7 @@ static inline bool is_overlapped(const int astart, const int asize,
     require(P.VU.vsew * 2 <= P.VU.ELEN); \
   } \
   require((insn.rs2() & (P.VU.vlmul - 1)) == 0); \
+  require(P.VU.vstart == 0); \
 
 //
 // vector: loop header and end helper
@@ -560,7 +563,7 @@ static inline bool is_overlapped(const int astart, const int asize,
     uint64_t mmask = (UINT64_MAX << (64 - mlen)) >> (64 - mlen - mpos); \
     uint64_t vs2 = P.VU.elt<uint64_t>(insn.rs2(), midx); \
     uint64_t vs1 = P.VU.elt<uint64_t>(insn.rs1(), midx); \
-    uint64_t &res = P.VU.elt<uint64_t>(insn.rd(), midx); \
+    uint64_t &res = P.VU.elt<uint64_t>(insn.rd(), midx, true); \
     res = (res & ~mmask) | ((op) & (1ULL << mpos)); \
   } \
   P.VU.vstart = 0;
@@ -802,7 +805,6 @@ static inline bool is_overlapped(const int astart, const int asize,
 
 // merge and copy loop
 #define VI_VVXI_MERGE_LOOP(BODY) \
-  VI_CHECK_SXX; \
   VI_GENERAL_LOOP_BASE \
   if (sew == e8){ \
     VXI_PARAMS(e8); \
@@ -1129,19 +1131,19 @@ VI_LOOP_END
   switch(P.VU.vsew) { \
   case e8: { \
     sign_d##16_t vd_w = P.VU.elt<sign_d##16_t>(rd_num, i); \
-    P.VU.elt<uint16_t>(rd_num, i) = \
+    P.VU.elt<uint16_t>(rd_num, i, true) = \
       op1((sign_1##16_t)(sign_1##8_t)var0 op0 (sign_2##16_t)(sign_2##8_t)var1) + var2; \
     } \
     break; \
   case e16: { \
     sign_d##32_t vd_w = P.VU.elt<sign_d##32_t>(rd_num, i); \
-    P.VU.elt<uint32_t>(rd_num, i) = \
+    P.VU.elt<uint32_t>(rd_num, i, true) = \
       op1((sign_1##32_t)(sign_1##16_t)var0 op0 (sign_2##32_t)(sign_2##16_t)var1) + var2; \
     } \
     break; \
   default: { \
     sign_d##64_t vd_w = P.VU.elt<sign_d##64_t>(rd_num, i); \
-    P.VU.elt<uint64_t>(rd_num, i) = \
+    P.VU.elt<uint64_t>(rd_num, i, true) = \
       op1((sign_1##64_t)(sign_1##32_t)var0 op0 (sign_2##64_t)(sign_2##32_t)var1) + var2; \
     } \
     break; \
