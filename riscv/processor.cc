@@ -222,7 +222,11 @@ void processor_t::parse_isa_string(const char* str)
       const char* ext = p+1, *end = ext;
       while (islower(*end))
         end++;
-      register_extension(find_extension(std::string(ext, end - ext).c_str())());
+
+      auto ext_str = std::string(ext, end - ext);
+      if (ext_str != "dummy")
+        register_extension(find_extension(ext_str.c_str())());
+
       p = end;
     } else {
       bad_isa_string(str);
@@ -798,10 +802,10 @@ void processor_t::set_csr(int which, reg_t val)
     case CSR_DPC:
       state.dpc = val & ~(reg_t)1;
       break;
-    case CSR_DSCRATCH:
+    case CSR_DSCRATCH0:
       state.dscratch0 = val;
       break;
-    case CSR_DSCRATCH + 1:
+    case CSR_DSCRATCH1:
       state.dscratch1 = val;
       break;
     case CSR_VSTART:
@@ -979,6 +983,8 @@ reg_t processor_t::get_csr(int which)
     case CSR_TDATA3: return 0;
     case CSR_DCSR:
       {
+        if (!state.debug_mode)
+          break;
         uint32_t v = 0;
         v = set_field(v, DCSR_XDEBUGVER, 1);
         v = set_field(v, DCSR_EBREAKM, state.dcsr.ebreakm);
@@ -993,10 +999,16 @@ reg_t processor_t::get_csr(int which)
         return v;
       }
     case CSR_DPC:
+      if (!state.debug_mode)
+        break;
       return state.dpc & pc_alignment_mask();
-    case CSR_DSCRATCH:
+    case CSR_DSCRATCH0:
+      if (!state.debug_mode)
+        break;
       return state.dscratch0;
-    case CSR_DSCRATCH + 1:
+    case CSR_DSCRATCH1:
+      if (!state.debug_mode)
+        break;
       return state.dscratch1;
     case CSR_VSTART:
       require_vector_vs;
