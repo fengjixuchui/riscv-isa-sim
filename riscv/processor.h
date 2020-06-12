@@ -274,7 +274,7 @@ public:
   }
   extension_t* get_extension() { return ext; }
   bool supports_extension(unsigned char ext) {
-    if (isupper(ext))
+    if (ext >= 'A' && ext <= 'Z')
       return ((state.misa >> (ext - 'A')) & 1);
     else
       return extension_table[ext];
@@ -305,7 +305,11 @@ public:
   // When true, take the slow simulation path.
   bool slow_path();
   bool halted() { return state.debug_mode; }
-  bool halt_request;
+  enum {
+    HR_NONE,    /* Halt request is inactive. */
+    HR_REGULAR, /* Regular halt request/debug interrupt. */
+    HR_GROUP    /* Halt requested due to halt group. */
+  } halt_request;
 
   // Return the index of a trigger that matched, or -1.
   inline int trigger_match(trigger_operation_t operation, reg_t address, reg_t data)
@@ -449,9 +453,14 @@ public:
       void *reg_file;
       char reg_referenced[NVPR];
       int setvl_count;
-      reg_t reg_mask, vlmax, vmlen;
+      reg_t vlmax;
       reg_t vstart, vxrm, vxsat, vl, vtype, vlenb;
-      reg_t vediv, vsew, vlmul;
+      reg_t vma, vta;
+      reg_t vediv, vsew;
+      reg_t veew;
+      float vemul;
+      float vflmul;
+      reg_t vmel;
       reg_t ELEN, VLEN, SLEN;
       bool vill;
 

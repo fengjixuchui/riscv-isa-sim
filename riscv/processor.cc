@@ -23,7 +23,7 @@
 processor_t::processor_t(const char* isa, const char* priv, const char* varch,
                          simif_t* sim, uint32_t id, bool halt_on_reset,
                          FILE* log_file)
-  : debug(false), halt_request(false), sim(sim), ext(NULL), id(id), xlen(0),
+  : debug(false), halt_request(HR_NONE), sim(sim), ext(NULL), id(id), xlen(0),
   histogram_enabled(false), log_commits_enabled(false),
   log_file(log_file), halt_on_reset(halt_on_reset),
   extension_table(256, false), last_pc(1), executions(1)
@@ -237,7 +237,7 @@ void processor_t::parse_isa_string(const char* str)
         p++;
       } else if (*p == 'x') {
         const char* ext = p + 1, *end = ext;
-        while (islower(*end))
+        while (islower(*end) || *end == '_')
           end++;
 
         auto ext_str = std::string(ext, end - ext);
@@ -251,12 +251,23 @@ void processor_t::parse_isa_string(const char* str)
       }
     } else if (*p == '_') {
       const char* ext = p + 1, *end = ext;
+      if (*ext == 'x') {
+        p++;
+        continue;
+      }
+
       while (islower(*end))
         end++;
 
       auto ext_str = std::string(ext, end - ext);
       if (ext_str == "zfh") {
         extension_table[EXT_ZFH] = true;
+      } else if (ext_str == "zvamo") {
+        extension_table[EXT_ZVAMO] = true;
+      } else if (ext_str == "zvlsseg") {
+        extension_table[EXT_ZVLSSEG] = true;
+      } else if (ext_str == "zvqmac") {
+        extension_table[EXT_ZVQMAC] = true;
       } else {
         sprintf(error_msg, "unsupported extension '%s'", ext_str.c_str());
         bad_isa_string(str, error_msg);
@@ -282,6 +293,16 @@ void processor_t::parse_isa_string(const char* str)
 
   if (supports_extension('Q') && !supports_extension('D'))
     bad_isa_string(str, "'Q' extension requires 'D'");
+
+  if (supports_extension(EXT_ZVAMO) &&
+      !(supports_extension('A') && supports_extension('V')))
+    bad_isa_string(str, "'Zvamo' extension requires 'A' and 'V'");
+
+  if (supports_extension(EXT_ZVLSSEG) && !supports_extension('V'))
+    bad_isa_string(str, "'Zvlsseg' extension requires 'V'");
+
+  if (supports_extension(EXT_ZVQMAC) && !supports_extension('V'))
+    bad_isa_string(str, "'Zvqmac' extension requires 'V'");
 }
 
 void state_t::reset(reg_t max_isa)
@@ -355,16 +376,26 @@ void processor_t::vectorUnit_t::reset(){
 }
 
 reg_t processor_t::vectorUnit_t::set_vl(int rd, int rs1, reg_t reqVL, reg_t newType){
+  int new_vlmul = 0;
   if (vtype != newType){
     vtype = newType;
     vsew = 1 << (BITS(newType, 4, 2) + 3);
-    vlmul = 1 << BITS(newType, 1, 0);
-    vediv = 1 << BITS(newType, 6, 5);
-    vlmax = VLEN/vsew * vlmul;
-    vmlen = vsew / vlmul;
-    reg_mask = (NVPR-1) & ~(vlmul-1);
+    new_vlmul = (BITS(newType, 5, 5) << 2) | BITS(newType, 1, 0);
+    new_vlmul = (int8_t)(new_vlmul << 5) >> 5;
+    vflmul = new_vlmul >= 0 ? 1 << new_vlmul : 1.0 / (1 << -new_vlmul);
+    vlmax = (VLEN/vsew) * vflmul;
+    vemul = vflmul;
+    veew = vsew;
+    vta = BITS(newType, 6, 6);
+    vma = BITS(newType, 7, 7);
+    vediv = 1 << BITS(newType, 9, 8);
 
-    vill = vsew > ELEN || vediv != 1 || (newType >> 7) != 0;
+    vill = !(vflmul >= 0.125 && vflmul <= 8)
+           || vsew > ELEN
+           || vflmul < ((float)vsew / ELEN)
+           || vediv != 1
+           || (newType >> 8) != 0;
+
     if (vill) {
       vlmax = 0;
       vtype = UINT64_MAX << (p->get_xlen() - 1);
@@ -1181,8 +1212,7 @@ void processor_t::register_extension(extension_t* x)
   for (auto insn : x->get_instructions())
     register_insn(insn);
   build_opcode_map();
-  for (auto disasm_insn : x->get_disasms())
-    disassembler->add_insn(disasm_insn);
+
   if (ext != NULL)
     throw std::logic_error("only one extension may be registered");
   ext = x;
