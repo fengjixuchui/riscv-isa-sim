@@ -85,10 +85,6 @@ typedef struct
   bool load;
 } mcontrol_t;
 
-inline reg_t BITS(reg_t v, int hi, int lo){
-  return (v >> lo) & ((2 << (hi - lo)) - 1);
-}
-
 enum VRM{
   RNU = 0,
   RNE,
@@ -164,6 +160,7 @@ struct state_t
 
   // control and status registers
   reg_t prv;    // TODO: Can this be an enum instead?
+  bool v;
   reg_t misa;
   reg_t mstatus;
   reg_t mepc;
@@ -184,6 +181,23 @@ struct state_t
   reg_t stvec;
   reg_t satp;
   reg_t scause;
+
+  reg_t mtval2;
+  reg_t mtinst;
+  reg_t hstatus;
+  reg_t hideleg;
+  reg_t hedeleg;
+  uint32_t hcounteren;
+  reg_t htval;
+  reg_t htinst;
+  reg_t hgatp;
+  reg_t vsstatus;
+  reg_t vstvec;
+  reg_t vsscratch;
+  reg_t vsepc;
+  reg_t vscause;
+  reg_t vstval;
+  reg_t vsatp;
 
   reg_t dpc;
   reg_t dscratch0, dscratch1;
@@ -228,10 +242,7 @@ typedef enum {
 typedef enum {
   // 65('A') ~ 90('Z') is reserved for standard isa in misa
   EXT_ZFH   = 0,
-  EXT_ZVAMO,
   EXT_ZVEDIV,
-  EXT_ZVLSSEG,
-  EXT_ZVQMAC,
 } isa_extension_t;
 
 // Count number of contiguous 1 bits starting from the LSB.
@@ -261,7 +272,8 @@ public:
   void reset();
   void step(size_t n); // run for n cycles
   void set_csr(int which, reg_t val);
-  reg_t get_csr(int which);
+  reg_t get_csr(int which, insn_t insn, bool write, bool peek = 0);
+  reg_t get_csr(int which) { return get_csr(which, insn_t(0), false, true); }
   mmu_t* get_mmu() { return mmu; }
   state_t* get_state() { return &state; }
   unsigned get_xlen() { return xlen; }
@@ -284,10 +296,11 @@ public:
   }
   void check_pc_alignment(reg_t pc) {
     if (unlikely(pc & ~pc_alignment_mask()))
-      throw trap_instruction_address_misaligned(pc);
+      throw trap_instruction_address_misaligned(pc, 0, 0);
   }
   reg_t legalize_privilege(reg_t);
   void set_privilege(reg_t);
+  void set_virt(bool);
   void update_histogram(reg_t pc);
   const disassembler_t* get_disassembler() { return disassembler; }
 
@@ -457,12 +470,10 @@ public:
       reg_t vstart, vxrm, vxsat, vl, vtype, vlenb;
       reg_t vma, vta;
       reg_t vediv, vsew;
-      reg_t veew;
-      float vemul;
       float vflmul;
-      reg_t vmel;
-      reg_t ELEN, VLEN, SLEN;
+      reg_t ELEN, VLEN;
       bool vill;
+      bool vstart_alu;
 
       // vector element for varies SEW
       template<class T>
@@ -481,7 +492,7 @@ public:
 
 #ifdef RISCV_ENABLE_COMMITLOG
           if (is_write)
-            p->get_state()->log_reg_write[((vReg) << 2) | 2] = {0, 0};
+            p->get_state()->log_reg_write[((vReg) << 4) | 2] = {0, 0};
 #endif
 
           T *regStart = (T*)((char*)reg_file + vReg * (VLEN >> 3));
@@ -504,7 +515,7 @@ public:
 
       reg_t get_vlen() { return VLEN; }
       reg_t get_elen() { return ELEN; }
-      reg_t get_slen() { return SLEN; }
+      reg_t get_slen() { return VLEN; }
 
       VRM get_vround_mode() {
         return (VRM)vxrm;
