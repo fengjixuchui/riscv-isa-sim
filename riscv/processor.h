@@ -245,6 +245,14 @@ typedef enum {
   EXT_ZVEDIV,
 } isa_extension_t;
 
+typedef enum {
+  IMPL_MMU_SV32,
+  IMPL_MMU_SV39,
+  IMPL_MMU_SV48,
+  IMPL_MMU_SBARE,
+  IMPL_MMU,
+} impl_extension_t;
+
 // Count number of contiguous 1 bits starting from the LSB.
 static int cto(reg_t val)
 {
@@ -272,6 +280,7 @@ public:
   void reset();
   void step(size_t n); // run for n cycles
   void set_csr(int which, reg_t val);
+  uint32_t get_id() const { return id; }
   reg_t get_csr(int which, insn_t insn, bool write, bool peek = 0);
   reg_t get_csr(int which) { return get_csr(which, insn_t(0), false, true); }
   mmu_t* get_mmu() { return mmu; }
@@ -290,6 +299,10 @@ public:
       return ((state.misa >> (ext - 'A')) & 1);
     else
       return extension_table[ext];
+  }
+  void set_impl(uint8_t impl, bool val) { impl_table[impl] = val; }
+  bool supports_impl(uint8_t impl) const {
+    return impl_table[impl];
   }
   reg_t pc_alignment_mask() {
     return ~(reg_t)(supports_extension('C') ? 0 : 2);
@@ -408,6 +421,9 @@ public:
 
   void set_pmp_num(reg_t pmp_num);
   void set_pmp_granularity(reg_t pmp_granularity);
+  void set_mmu_capability(int cap);
+
+  const char* get_symbol(uint64_t addr);
 
 private:
   simif_t* sim;
@@ -425,6 +441,7 @@ private:
   FILE *log_file;
   bool halt_on_reset;
   std::vector<bool> extension_table;
+  std::vector<bool> impl_table;
   
 
   std::vector<insn_desc_t> instructions;
@@ -453,6 +470,7 @@ private:
   void build_opcode_map();
   void register_base_instructions();
   insn_func_t decode_insn(insn_t insn);
+  reg_t cal_satp(reg_t val) const;
 
   // Track repeated executions for processor_t::disasm()
   uint64_t last_pc, last_bits, executions;
@@ -470,6 +488,7 @@ public:
       reg_t vstart, vxrm, vxsat, vl, vtype, vlenb;
       reg_t vma, vta;
       reg_t vediv, vsew;
+      const reg_t vsew_min = 8; // the narrowest supported SEW value at LMUL=1
       float vflmul;
       reg_t ELEN, VLEN;
       bool vill;

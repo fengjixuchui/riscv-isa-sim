@@ -77,7 +77,7 @@ class insn_t
 public:
   insn_t() = default;
   insn_t(insn_bits_t bits) : b(bits) {}
-  insn_bits_t bits() { return b; }
+  insn_bits_t bits() { return b & ~((UINT64_MAX) << (length() * 8)); }
   int length() { return insn_length(b); }
   int64_t i_imm() { return int64_t(b) >> 20; }
   int64_t shamt() { return x(20, 6); }
@@ -91,6 +91,7 @@ public:
   uint64_t rs3() { return x(27, 5); }
   uint64_t rm() { return x(12, 3); }
   uint64_t csr() { return x(20, 12); }
+  uint64_t iorw() { return x(20, 8); }
 
   int64_t rvc_imm() { return x(2, 5) + (xs(12, 1) << 5); }
   int64_t rvc_zimm() { return x(2, 5) + (x(12, 1) << 5); }
@@ -236,6 +237,7 @@ private:
 #define require_rv64 require(xlen == 64)
 #define require_rv32 require(xlen == 32)
 #define require_extension(s) require(p->supports_extension(s))
+#define require_impl(s) require(p->supports_impl(s))
 #define require_fp require((STATE.mstatus & MSTATUS_FS) != 0)
 #define require_accelerator require((STATE.mstatus & MSTATUS_XS) != 0)
 
@@ -487,19 +489,22 @@ static inline bool is_aligned(const unsigned val, const unsigned pos)
 
 #define VI_CHECK_LD_INDEX(elt_width) \
   VI_CHECK_ST_INDEX(elt_width); \
-  if (elt_width > P.VU.vsew) { \
-    if (insn.rd() != insn.rs2()) \
-      require_noover(insn.rd(), P.VU.vflmul, insn.rs2(), vemul); \
-  } else if (elt_width < P.VU.vsew) { \
-    if (vemul < 1) {\
-      require_noover(insn.rd(), P.VU.vflmul, insn.rs2(), vemul); \
-    } else {\
-      require_noover_widen(insn.rd(), P.VU.vflmul, insn.rs2(), vemul); \
+  for (reg_t idx = 0; idx < nf; ++idx) { \
+    reg_t flmul = P.VU.vflmul < 1 ? 1 : P.VU.vflmul; \
+    reg_t seg_vd = insn.rd() + flmul * idx;  \
+    if (elt_width > P.VU.vsew) { \
+      if (seg_vd != insn.rs2()) \
+        require_noover(seg_vd, P.VU.vflmul, insn.rs2(), vemul); \
+    } else if (elt_width < P.VU.vsew) { \
+      if (vemul < 1) {\
+        require_noover(seg_vd, P.VU.vflmul, insn.rs2(), vemul); \
+      } else {\
+        require_noover_widen(seg_vd, P.VU.vflmul, insn.rs2(), vemul); \
+      } \
     } \
-  } \
-  if (insn.v_nf() > 0) {\
-    require_noover(insn.rd(), P.VU.vflmul, insn.rs2(), vemul); \
-    require_noover(vd, nf, insn.rs2(), 1); \
+    if (nf >= 2) { \
+      require_noover(seg_vd, P.VU.vflmul, insn.rs2(), vemul); \
+    } \
   } \
   require_vm; \
 
@@ -1831,6 +1836,7 @@ for (reg_t i = 0; i < P.VU.vlmax && P.VU.vl != 0; ++i) { \
   for (reg_t i = P.VU.vstart; i < vl; ++i) { \
     VI_ELEMENT_SKIP(i); \
     VI_STRIP(i); \
+    P.VU.vstart = i; \
     switch (P.VU.vsew) { \
     case e32: {\
       auto vs3 = P.VU.elt< type ## 32_t>(vd, vreg_inx); \
@@ -1859,6 +1865,7 @@ for (reg_t i = 0; i < P.VU.vlmax && P.VU.vl != 0; ++i) { \
   require_vm; \
   reg_t from = P.VU.vsew / div; \
   require(from >= e8 && from <= e64); \
+  require(((float)P.VU.vflmul / div) >= 0.125 && ((float)P.VU.vflmul / div) <= 8 ); \
   require_align(insn.rd(), P.VU.vflmul); \
   require_align(insn.rs2(), P.VU.vflmul / div); \
   if ((P.VU.vflmul / div) < 1) { \

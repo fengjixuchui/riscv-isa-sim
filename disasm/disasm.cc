@@ -353,6 +353,30 @@ struct : public arg_t {
   }
 } x0;
 
+struct : public arg_t {
+  std::string to_string(insn_t insn) const {
+    std::stringstream s;
+    auto iorw = insn.iorw();
+    bool has_pre = false;
+    static const char type[] = "wroi";
+    for (int i = 7; i >= 4; --i) {
+      if (iorw & (1ul << i)) {
+        s << type[i - 4];
+        has_pre = true;
+      }
+    }
+
+    s << (has_pre ? "," : "");
+    for (int i = 3; i >= 0; --i) {
+      if (iorw & (1ul << i)) {
+        s << type[i];
+      }
+    }
+
+    return s.str();
+  }
+} iorw;
+
 typedef struct {
   reg_t match;
   reg_t mask;
@@ -396,6 +420,7 @@ disassembler_t::disassembler_t(int xlen)
   #define DEFINE_NOARG(code) \
     add_insn(new disasm_insn_t(#code, match_##code, mask_##code, {}));
   #define DEFINE_RTYPE(code) DISASM_INSN(#code, code, 0, {&xrd, &xrs1, &xrs2})
+  #define DEFINE_R1TYPE(code) DISASM_INSN(#code, code, 0, {&xrd, &xrs1})
   #define DEFINE_ITYPE(code) DISASM_INSN(#code, code, 0, {&xrd, &xrs1, &imm})
   #define DEFINE_ITYPE_SHIFT(code) DISASM_INSN(#code, code, 0, {&xrd, &xrs1, &shamt})
   #define DEFINE_I0TYPE(name, code) DISASM_INSN(name, code, mask_rs1, {&xrd, &imm})
@@ -542,6 +567,45 @@ disassembler_t::disassembler_t(int xlen)
   DEFINE_RTYPE(remw);
   DEFINE_RTYPE(remuw);
 
+  DEFINE_ITYPE_SHIFT(slliu_w);
+  DEFINE_RTYPE(addu_w);
+  DEFINE_RTYPE(sh1add);
+  DEFINE_RTYPE(sh2add);
+  DEFINE_RTYPE(sh3add);
+  DEFINE_RTYPE(sh1addu_w);
+  DEFINE_RTYPE(sh2addu_w);
+  DEFINE_RTYPE(sh3addu_w);
+  DEFINE_RTYPE(addwu);
+  DEFINE_RTYPE(subwu);
+  DEFINE_ITYPE(addiwu);
+  DEFINE_RTYPE(ror);
+  DEFINE_RTYPE(rorw);
+  DEFINE_RTYPE(rol);
+  DEFINE_RTYPE(rolw);
+  DEFINE_ITYPE_SHIFT(rori);
+  DEFINE_ITYPE_SHIFT(roriw);
+  DEFINE_R1TYPE(ctz);
+  DEFINE_R1TYPE(ctzw);
+  DEFINE_R1TYPE(clz);
+  DEFINE_R1TYPE(clzw);
+  DEFINE_R1TYPE(pcnt);
+  DEFINE_R1TYPE(pcntw);
+  DEFINE_RTYPE(min);
+  DEFINE_RTYPE(minu);
+  DEFINE_RTYPE(max);
+  DEFINE_RTYPE(maxu);
+  DEFINE_RTYPE(andn);
+  DEFINE_RTYPE(orn);
+  DEFINE_RTYPE(xnor);
+  DEFINE_R1TYPE(sext_b);
+  DEFINE_R1TYPE(sext_h);
+  DEFINE_RTYPE(pack);
+  DEFINE_RTYPE(packw);
+  DEFINE_RTYPE(grev);
+  DEFINE_ITYPE_SHIFT(grevi);
+  DEFINE_RTYPE(gorc);
+  DEFINE_ITYPE_SHIFT(gorci);
+
   DEFINE_NOARG(ecall);
   DEFINE_NOARG(ebreak);
   DEFINE_NOARG(uret);
@@ -549,7 +613,7 @@ disassembler_t::disassembler_t(int xlen)
   DEFINE_NOARG(mret);
   DEFINE_NOARG(dret);
   DEFINE_NOARG(wfi);
-  DEFINE_NOARG(fence);
+  add_insn(new disasm_insn_t("fence", match_fence, mask_fence, {&iorw}));
   DEFINE_NOARG(fence_i);
   DEFINE_SFENCE_TYPE(sfence_vma);
 
@@ -754,12 +818,13 @@ disassembler_t::disassembler_t(int xlen)
   std::vector<const arg_t *> v_st_index = {&vs3, &v_address, &vs2, &opt, &vm};
 
   DISASM_VMEM_INSN(vle,    v_ld_unit,   );
+  DISASM_VMEM_INSN(vluxei, v_ld_index,  );
   DISASM_VMEM_INSN(vlse,   v_ld_stride, );
-  DISASM_VMEM_INSN(vlxei,  v_ld_index,  );
+  DISASM_VMEM_INSN(vloxei, v_ld_index,  );
   DISASM_VMEM_INSN(vle,    v_ld_unit, ff);
   DISASM_VMEM_INSN(vse,    v_st_unit,   );
+  DISASM_VMEM_INSN(vsoxei, v_st_index,  );
   DISASM_VMEM_INSN(vsse,   v_st_stride, );
-  DISASM_VMEM_INSN(vsxei,  v_st_index,  );
   DISASM_VMEM_INSN(vsuxei, v_st_index,  );
 
   #undef DISASM_VMEM_INSN
@@ -770,11 +835,14 @@ disassembler_t::disassembler_t(int xlen)
       {match_vle8_v,   mask_vle8_v,   "vlseg%de%d.v",   v_ld_unit},
       {match_vse8_v,   mask_vse8_v,   "vsseg%de%d.v",   v_st_unit},
 
+      {match_vluxei8_v, mask_vluxei8_v, "vluxseg%dei%d.v", v_ld_index},
+      {match_vsuxei8_v, mask_vsuxei8_v, "vsuxseg%dei%d.v", v_st_index},
+
       {match_vlse8_v,  mask_vlse8_v,  "vlsseg%de%d.v",  v_ld_stride},
       {match_vsse8_v,  mask_vsse8_v,  "vssseg%de%d.v",  v_st_stride},
 
-      {match_vlxei8_v, mask_vlxei8_v, "vlxseg%dei%d.v", v_ld_index},
-      {match_vsxei8_v, mask_vsxei8_v, "vsxseg%dei%d.v", v_st_index},
+      {match_vloxei8_v, mask_vloxei8_v, "vloxseg%dei%d.v", v_ld_index},
+      {match_vsoxei8_v, mask_vsoxei8_v, "vsoxseg%dei%d.v", v_st_index},
 
       {match_vle8ff_v, mask_vle8ff_v, "vlseg%de%dff.v", v_ld_unit}
     };
